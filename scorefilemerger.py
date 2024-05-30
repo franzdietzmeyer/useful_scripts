@@ -1,5 +1,6 @@
-import os
 import pandas as pd
+import os
+import sys
 
 print('''
  ______     ______     ______     ______     ______                 
@@ -23,79 +24,97 @@ print('''
       
       ''')
 
-print('Insert the string or part of the file name you are searching for. E.g. "mutation.{3}". The script will now merge all score files into one, generate a file that only contains the [total_score] and the [description] column and one file that only conatins the names of the pdbs with the lowest total_score out of the replicates ')
-print('\n')
-
-# Get the current directory
-current_dir = os.getcwd()
-
-
-# Check if there are any .sc files in the current directory
-sc_files = [f for f in os.listdir(current_dir) if f.endswith(".sc")]
-
-# If no .sc files are found, print a message and exit
-if not sc_files:
-    print("No score files detected!")
-    exit()
-
-# If .sc files are found, continue with the script
-else:
-    num_sc_files = len(sc_files)
-    print(f"Detected {num_sc_files} .sc file(s). Proceeding with the script...")
-    
-print('\n')
 
 # Set the input directory as the current directory
-input_dir = current_dir
+input_dir = sys.argv[1]
 
 # Set the output directory as the current directory
-output_dir = current_dir
+output_dir = sys.argv[2]
 
-# Check if the output directory exists, if not create it
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+### MERGE CSM SCORE FILES
+#input_dir = '/home/iwe25/Franz/CEPI/P_GM/test'
 
-# Ask the user for the string to search
-search_string = input("Enter the string to search for: ")
+
+input_dir_csm = f'{input_dir}/csm/output/'
+output_dir_csm = f'{input_dir}/csm/output/'
+
+# Initialize an empty list to store individual DataFrames
+dataframes = []
+
+# Loop through all files in the directory
+for filename in os.listdir(input_dir_csm):
+    if filename.endswith(".sc"):
+        # Read the file into a DataFrame
+        with open(os.path.join(input_dir_csm, filename), 'r') as file:
+            lines = file.readlines()
+
+        # Extract the column names from the 'SEQUENCE:' line
+        column_names = lines[1].split()[1:]  # Skip 'SCORE:' and get the rest of the headers
+        
+        # Create a DataFrame from the data lines, skipping the first two lines (headers)
+        data = [line.split()[1:] for line in lines[2:] if line.startswith("SCORE:")]
+        df = pd.DataFrame(data, columns=column_names)
+        
+        # Convert all columns to appropriate data types
+        df = df.apply(pd.to_numeric, errors='ignore')
+
+        # Find the PTMPredictionMetric column
+        ptm_column = [col for col in df.columns if col.startswith("PTMPredictionMetric")][0]
+        
+        # Extract the required columns
+        selected_columns = df[[ptm_column, 'description']]
+        
+        # Rename the PTM column to 'PTM'
+        selected_columns.rename(columns={ptm_column: 'PTM'}, inplace=True)
+        
+        # Append the DataFrame to the list
+        dataframes.append(selected_columns)
+
+# Concatenate all DataFrames in the list into one DataFrame
+merged_df = pd.concat(dataframes, ignore_index=True)
+
+merged_df['mut_group'] = merged_df['description'].str.extract(r'(mut.{3})')
+
+
+output_file = os.path.join(output_dir_csm, 'merged_score_files.csv')
+# Output the merged DataFrame to a CSV file (optional)
+merged_df.to_csv(output_file, index=False)
+
+print("Data merging completed. The merged DataFrame has been saved to 'merged_score_files.sc'.")
+
+
+###--------------------------------------------------------------------------------------------------------------------------
+
+
+
+### MERGE FASTRELAX SCORE FILES
+
+
+#input_dir = '/home/iwe25/Franz/CEPI/P_GM/test'
+
+input_dir_fr = f'{input_dir}/fastrelaxes/fr_csm'
+output_dir_fr = f'{input_dir}/fastrelaxes/fr_csm'
 
 # Get a list of all .sc files in the input directory
-sc_files = [f for f in os.listdir(input_dir) if f.endswith(".sc")]
+sc_files = [f for f in os.listdir(input_dir_fr) if f.endswith(".sc")]
 
 # Initialize an empty DataFrame to store the merged data
-merged_df = pd.DataFrame()
+merged_df_fr = pd.DataFrame()
 
 # Loop through the .sc files and append their data to the merged DataFrame
 for sc_file in sc_files:
-    file_path = os.path.join(input_dir, sc_file)
-    df = pd.read_csv(file_path, skiprows=[0], delim_whitespace=True)
-    merged_df = pd.concat([merged_df, df], ignore_index=True)
+    file_path = os.path.join(input_dir_fr, sc_file)
+    df_fr = pd.read_csv(file_path, skiprows=[0], delim_whitespace=True)
+    merged_df_fr = pd.concat([merged_df_fr, df_fr], ignore_index=True)
 
-# Write the merged DataFrame to the output file
-output_file = os.path.join(output_dir, "merged_score_files.sc")
-merged_df.to_csv(output_file, index=False, sep=" ")
 
-input_FR_file = f'{input_dir}/merged_score_files.sc'
 
-# Read the score.sc file into a DataFrame
-df_FR = pd.read_csv(input_FR_file, delimiter=' ')[['total_score', 'description']]
+df = merged_df_fr[['total_score', 'description']]
+df_wt = merged_df_fr[['total_score', 'description']]
 
-# Set the output file name
-output_file = os.path.join(output_dir, "cleaned_FR.sc")
-
-# Write the DataFrame to the output file
-df_FR.to_csv(output_file, index=False)
-
-# Read the first .sc file into a DataFrame
-df1 = pd.read_csv(f'{input_dir}/cleaned_FR.sc')[['total_score', 'description']]
-
-# Sample DataFrame
-data1 = df1
-data2 = df1
-df = data1
-df_wt = data2
 
 # Replace 'mut.{3}' part from description column with user input string
-df['mut_group'] = df['description'].str.extract(r'(search_string)')
+df['mut_group'] = df['description'].str.extract(r'(mut.{3})')
 
 # Group by 'mut_group' and get the row with the lowest 'total_score' within each group
 lowest_score_df = df.loc[df.groupby('mut_group')['total_score'].idxmin()]
@@ -103,18 +122,45 @@ lowest_score_df = df.loc[df.groupby('mut_group')['total_score'].idxmin()]
 # Reset index
 lowest_score_df.reset_index(drop=True, inplace=True)
 
-# Drop the 'mut_group' column as it's not needed anymore
-lowest_score_df.drop(columns=['mut_group'], inplace=True)
 
-df_wt['mut_group'] = df_wt['description'].str.extract(r'(wt)')
-df_wt_lowest_score = df_wt.loc[df_wt.groupby('mut_group')['total_score'].idxmin()]
-df_wt_lowest_score.reset_index(drop=True, inplace=True)
-df_wt_lowest_score.drop(columns=['mut_group'], inplace=True)
-
-lowest_score_df_merged = pd.concat([lowest_score_df, df_wt_lowest_score], ignore_index=True)
 
 # Set the output file name
-output_file = os.path.join(output_dir, "sorted_score_FR.sc")
+output_file = os.path.join(output_dir_fr, "sorted_score_FR.csv")
 
 # Write the merged DataFrame to the output file
-lowest_score_df_merged.to_csv(output_file, index=False)
+lowest_score_df.to_csv(output_file, index=False)
+
+
+###--------------------------------------------------------------------------------------------------------------------------
+merged_df.drop(columns=['description'], inplace=True)
+
+wt_df=pd.DataFrame(columns=['mut_group','PTM'])
+for x in lowest_score_df['mut_group']:
+    
+    if x.endswith('wt'):
+        print(x)
+        wt_df['mut_group']=[x]
+        wt_df['PTM']=[0]
+merged_df=pd.concat([merged_df,wt_df],axis=0)
+
+
+
+output_dir_final = f'{input_dir}/results/scores'
+
+combined_df_ptm_fr = pd.merge(lowest_score_df, merged_df, on='mut_group')
+
+# Set the output file name
+output_file_final = os.path.join(output_dir_final, "final_scores_GM.csv")
+
+# Write the merged DataFrame to the output file
+combined_df_ptm_fr.to_csv(output_file_final, index=False)
+
+
+print('scorefilemerger run succsessfull')
+
+
+
+
+# __author__ = "Franz Dietzmeyer"
+# __contact__ = "franz.dietzmeyer@medizin.uni-leipzig.de"
+# __version__ = "1.5.1"
